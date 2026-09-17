@@ -18,17 +18,16 @@ def get_retriever():
     """加载本地Chroma向量库，返回检索器"""
     embedding = ZhipuAIEmbeddings()
     
-    # 基于当前文件路径，定位到项目根目录的向量库，避免相对路径坑
-    current_file = Path(__file__)
-    # 向上两级 = 项目根目录 llm-universe
-    root_dir = current_file.parent.parent.parent
-    persist_directory = root_dir / "data_base" / "vector_db" / "chroma"
+    # 当前文件就在仓库根目录，直接定位同目录下的 data_base
+    current_dir = Path(__file__).parent
+    persist_directory = current_dir / "data_base" / "vector_db" / "chroma"
     
     vectordb = Chroma(
         persist_directory=str(persist_directory),
         embedding_function=embedding
     )
     return vectordb.as_retriever(search_kwargs={"k": 3})
+
 
 
 def combine_docs(docs):
