@@ -91,7 +91,7 @@ def gen_response(chain, input, chat_history):
 
 # ========== Streamlit 界面 ==========
 def main():
-    st.markdown('### 个人大模型应用开发尝试')
+    st.markdown('### 😊个人大模型应用开发尝试')
     # 初始化对话历史
     if "messages" not in st.session_state:
         st.session_state.messages = []
