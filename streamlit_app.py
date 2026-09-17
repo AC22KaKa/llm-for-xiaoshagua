@@ -1,44 +1,64 @@
-import streamlit as st
-from langchain_openai import ChatOpenAI
-import os
+# ========== 导入区 ==========
+from langchain.chains import RetrievalQA
+from langchain_community.vectorstores import Chroma
+from zhipuai_embedding import ZhipuAIEmbeddings
+from zhipuai_llm import ZhipuaiLLM
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableBranch, RunnablePassthrough
-import sys
-sys.path.append("notebook/C3 搭建知识库") # 将父目录放入系统路径中
-from zhipuai_embedding import ZhipuAIEmbeddings
-from langchain_community.vectorstores import Chroma
+import streamlit as st
+import os
+from dotenv import load_dotenv
+from pathlib import Path
 
+load_dotenv()
+
+# ========== 工具函数 ==========
 def get_retriever():
-    # 定义 Embeddings
+    """加载本地Chroma向量库，返回检索器"""
     embedding = ZhipuAIEmbeddings()
-    # 向量数据库持久化路径
-    persist_directory = 'data_base/vector_db/chroma'
-    # 加载数据库
+    
+    # 基于当前文件路径，定位到项目根目录的向量库，避免相对路径坑
+    current_file = Path(__file__)
+    # 向上两级 = 项目根目录 llm-universe
+    root_dir = current_file.parent.parent.parent
+    persist_directory = root_dir / "data_base" / "vector_db" / "chroma"
+    
     vectordb = Chroma(
-        persist_directory=persist_directory,
+        persist_directory=str(persist_directory),
         embedding_function=embedding
     )
-    return vectordb.as_retriever()
+    return vectordb.as_retriever(search_kwargs={"k": 3})
+
 
 def combine_docs(docs):
+    """把检索到的文档拼接成字符串"""
     return "\n\n".join(doc.page_content for doc in docs["context"])
 
+
 def get_qa_history_chain():
+    """构建带历史对话的RAG链"""
     retriever = get_retriever()
-    llm = ChatOpenAI(model_name="gpt-4o", temperature=0)
+    # 替换成智谱LLM，不再用OpenAI
+    llm = ZhipuaiLLM(
+        model_name="glm-4-flash",
+        temperature=0,
+        api_key=os.getenv("ZHIPUAI_API_KEY")
+    )
+
     condense_question_system_template = (
         "请根据聊天记录总结用户最近的问题，"
         "如果没有多余的聊天记录则返回用户的问题。"
     )
     condense_question_prompt = ChatPromptTemplate([
-            ("system", condense_question_system_template),
-            ("placeholder", "{chat_history}"),
-            ("human", "{input}"),
-        ])
+        ("system", condense_question_system_template),
+        ("placeholder", "{chat_history}"),
+        ("human", "{input}"),
+    ])
 
     retrieve_docs = RunnableBranch(
-        (lambda x: not x.get("chat_history", False), (lambda x: x["input"]) | retriever, ),
+        (lambda x: not x.get("chat_history", False),
+         (lambda x: x["input"]) | retriever),
         condense_question_prompt | llm | StrOutputParser() | retriever,
     )
 
@@ -50,13 +70,12 @@ def get_qa_history_chain():
         "\n\n"
         "{context}"
     )
-    qa_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            ("placeholder", "{chat_history}"),
-            ("human", "{input}"),
-        ]
-    )
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("placeholder", "{chat_history}"),
+        ("human", "{input}"),
+    ])
+
     qa_chain = (
         RunnablePassthrough().assign(context=combine_docs)
         | qa_prompt
@@ -65,11 +84,14 @@ def get_qa_history_chain():
     )
 
     qa_history_chain = RunnablePassthrough().assign(
-        context = retrieve_docs, 
-        ).assign(answer=qa_chain)
+        context=retrieve_docs,
+    ).assign(answer=qa_chain)
+
     return qa_history_chain
 
+
 def gen_response(chain, input, chat_history):
+    """流式生成回答"""
     response = chain.stream({
         "input": input,
         "chat_history": chat_history
@@ -78,23 +100,27 @@ def gen_response(chain, input, chat_history):
         if "answer" in res.keys():
             yield res["answer"]
 
-# Streamlit 应用程序界面
+
+# ========== Streamlit 界面 ==========
 def main():
     st.markdown('### 🦜🔗 动手学大模型应用开发')
 
-    # 用于跟踪对话历史
+    # 初始化对话历史
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    # 存储检索问答链
+    # 初始化RAG链（只创建一次）
     if "qa_history_chain" not in st.session_state:
         st.session_state.qa_history_chain = get_qa_history_chain()
+
     messages = st.container(height=550)
-    # 显示整个对话历史
+
+    # 渲染历史消息
     for message in st.session_state.messages:
-            with messages.chat_message(message[0]):
-                st.write(message[1])
+        with messages.chat_message(message[0]):
+            st.write(message[1])
+
+    # 处理用户输入
     if prompt := st.chat_input("Say something"):
-        # 将用户输入添加到对话历史中
         st.session_state.messages.append(("human", prompt))
         with messages.chat_message("human"):
             st.write(prompt)
@@ -106,6 +132,7 @@ def main():
         )
         with messages.chat_message("ai"):
             output = st.write_stream(answer)
+
         st.session_state.messages.append(("ai", output))
 
 
